@@ -1,0 +1,8 @@
+# FactoryGuard AI — UiPath AgentHack 2026
+# No external dependencies required for the core agent
+# All libraries used are Python standard library only:
+#   json, math, os, random, sys, time, urllib, http.server, datetime
+
+# Optional — only needed if you add Streamlit dashboard locally
+# streamlit>=1.35.0
+# pandas>=2.0.0
