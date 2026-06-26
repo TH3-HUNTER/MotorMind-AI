@@ -1,15 +1,7 @@
 """
-MotorMind AI — UiPath Coded Agent
+MotorMind AI 
 Motor: 400V / 7.5kW / 1450 RPM 3-phase induction motor
 Returns structured JSON for UiPath Maestro BPMN orchestration
-
-Usage:
-    python motor_agent.py                        # single diagnosis run
-    python motor_agent.py --serve                # HTTP mode for UiPath Agent Builder
-    python motor_agent.py --simulate bearing     # inject a specific fault
-    python motor_agent.py --simulate voltage
-    python motor_agent.py --simulate overtemp
-    python motor_agent.py --simulate combined
 """
 
 import json
@@ -23,7 +15,7 @@ import urllib.request
 from datetime import datetime
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_KEY_HERE")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 MODEL          = "gemini-3.1-flash-lite"
 GEMINI_URL     = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -248,11 +240,17 @@ def detect_faults(readings: list[dict]) -> list[str]:
         faults.append(f"POSSIBLE PHASE IMBALANCE: I={curr:.1f}A "
                        f"at V={volt:.0f}V RPM={rpm:.0f}")
     # Rule 18 — efficiency degradation
+    # Estimate actual load from RPM slip: slip = (1500-rpm)/1500
+    # Expected current scales with load fraction
     if curr > 2 and rpm > 100:
-        expected_curr = (P_RATED * 0.7 / EFFICIENCY) / (math.sqrt(3) * volt * PF)
-        if curr > expected_curr * 1.25:
-            faults.append(f"EFFICIENCY DEGRADATION: I={curr:.1f}A vs expected "
-                           f"{expected_curr:.1f}A — check load coupling")
+        actual_slip  = (1500.0 - rpm) / 1500.0
+        load_est     = min(1.0, actual_slip / 0.05)   # slip=5% at 100% load
+        load_est     = max(0.1, load_est)
+        expected_curr = (P_RATED * load_est / EFFICIENCY) / (math.sqrt(3) * max(volt,1) * PF)
+        # Only flag if current exceeds expected by more than 35% AND current is above rated
+        if curr > expected_curr * 1.35 and curr > I_RATED * 0.85:
+            faults.append(f"EFFICIENCY DEGRADATION: I={curr:.1f}A vs load-based expected "
+                           f"{expected_curr:.1f}A (+{((curr/expected_curr-1)*100):.0f}%) — check load coupling")
     # Rule 19 — power factor proxy (high current, low power)
     power_kw = latest.get("power_kw", 0)
     if curr > 8 and power_kw < (curr * volt * math.sqrt(3) * 0.60) / 1000:
@@ -515,48 +513,147 @@ def _get_bpmn_route(severity: str) -> dict:
     return routes.get(severity, routes["HEALTHY"])
 
 
-# ─── HTTP SERVER MODE (for UiPath Agent Builder webhook) ──────────────────────
+# ─── HTTP SERVER MODE (Flask — for UiPath Agent Builder + Render.com deploy) ──
 def serve():
-    """Lightweight HTTP server so UiPath Agent Builder can call this agent."""
-    import http.server
-    import urllib.parse
+    """
+    Full Flask HTTP server.
+    Deploy this on Render.com for a permanent public URL.
+    UiPath BPMN calls these endpoints instead of running Python locally.
 
-    class AgentHandler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            length  = int(self.headers.get("Content-Length", 0))
-            body    = self.rfile.read(length)
-            try:
-                params = json.loads(body)
-            except Exception:
-                params = {}
+    Endpoints:
+      GET  /health              → health check (UiPath polls this)
+      POST /api/diagnose        → full diagnosis (fault injection params from BPMN)
+      GET  /api/latest          → latest sensor snapshot (BPMN Script task polls this)
+      POST /api/diagnose/live   → diagnosis from raw sensor values (UiPath Agent inputs)
+    """
+    try:
+        from flask import Flask as _Flask, request as _req, jsonify as _json
+    except ImportError:
+        print("Flask not installed. Run: pip install flask")
+        return
 
-            result      = run_diagnosis(**params)
-            response    = json.dumps(result, indent=2).encode("utf-8")
+    _app = _Flask("MotorMindAgent")
 
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", len(response))
-            self.end_headers()
-            self.wfile.write(response)
+    # shared latest state — updated on every diagnose call
+    _state = {
+        "voltage_v": 400.0, "current_a": 0.0, "temperature_c": 25.0,
+        "vibration_mm_s": 0.5, "rpm": 1450.0, "power_kw": 0.0,
+        "status": "HEALTHY", "faults": "NONE", "severity": "HEALTHY",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
-        def do_GET(self):
-            if self.path == "/health":
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'{"status":"ok","agent":"MotorMind AI"}')
-            else:
-                self.send_response(404)
-                self.end_headers()
+    @_app.route("/health", methods=["GET"])
+    def _health():
+        return _json({"status": "ok", "agent": "MotorMind AI v1.0", "model": MODEL})
 
-        def log_message(self, fmt, *args):
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] {fmt % args}")
+    @_app.route("/api/diagnose", methods=["POST"])
+    def _diagnose():
+        """
+        Main endpoint — UiPath BPMN Script task POSTs here with fault params.
+        Body (all optional, defaults to normal operation):
+          load_pct, voltage_v, rpm_setpoint,
+          fault_bearing, fault_overtemp, fault_overcurrent, fault_voltage_drop
+        Returns full diagnosis JSON including severity for gateway routing.
+        """
+        d = _req.get_json(force=True, silent=True) or {}
+        allowed = {"load_pct","voltage_v","rpm_setpoint","history_seconds",
+                   "fault_bearing","fault_overtemp","fault_overcurrent","fault_voltage_drop"}
+        kwargs = {k: v for k, v in d.items() if k in allowed}
+        result = run_diagnosis(**kwargs)
+        # update shared state for /api/latest
+        s = result.get("sensors", {})
+        _state.update({
+            "voltage_v":      s.get("voltage_v", 400),
+            "current_a":      s.get("current_a", 0),
+            "temperature_c":  s.get("temperature_c", 25),
+            "vibration_mm_s": s.get("vibration_mm_s", 0.5),
+            "rpm":            s.get("rpm", 1450),
+            "power_kw":       s.get("power_kw", 0),
+            "status":         result.get("status", "HEALTHY"),
+            "severity":       result.get("severity", "HEALTHY"),
+            "faults":         ", ".join(result.get("fault_list", [])) or "NONE",
+            "timestamp":      result.get("timestamp", ""),
+        })
+        return _json(result)
+
+    @_app.route("/api/latest", methods=["GET"])
+    def _latest():
+        """
+        UiPath BPMN Script task GETs this at process start to get live sensor values.
+        Returns the 7 fields the MotorMind Agent task expects as inputs.
+        """
+        return _json(dict(_state))
+
+    @_app.route("/api/diagnose/live", methods=["POST"])
+    def _diagnose_live():
+        """
+        Called when UiPath Agent Builder passes live sensor values directly.
+        Body: voltage_v, current_a, temperature_c, vibration_mm_s, rpm, status, faults
+        Skips simulation — diagnoses from the provided values.
+        """
+        d = _req.get_json(force=True, silent=True) or {}
+        voltage_v      = float(d.get("voltage_v",      400.0))
+        current_a      = float(d.get("current_a",      0.0))
+        temperature_c  = float(d.get("temperature_c",  25.0))
+        vibration_mm_s = float(d.get("vibration_mm_s", 0.5))
+        rpm            = float(d.get("rpm",             1450.0))
+        status_in      = str(d.get("status",            "HEALTHY"))
+        faults_in      = str(d.get("faults",            "NONE"))
+
+        # Build synthetic reading so fault engine and Gemini can work
+        reading = {
+            "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rpm":            rpm,
+            "temperature_c":  temperature_c,
+            "vibration_mm_s": vibration_mm_s,
+            "current_a":      current_a,
+            "voltage_v":      voltage_v,
+            "power_kw":       round((math.sqrt(3) * voltage_v * current_a * PF) / 1000, 3),
+            "status":         status_in,
+            "load_pct":       70.0,
+        }
+        readings = [reading] * 15  # pad to 15 so trend rules activate
+
+        rule_faults = detect_faults(readings)
+        if faults_in and faults_in != "NONE":
+            for f in faults_in.split(","):
+                f = f.strip()
+                if f and f not in rule_faults:
+                    rule_faults.append(f)
+
+        diagnosis = call_gemini(readings, rule_faults)
+
+        if "CRITICAL" in status_in or any("CRITICAL" in f for f in rule_faults):
+            severity = "CRITICAL"
+        elif "WARNING" in status_in or rule_faults:
+            severity = "WARNING"
+        else:
+            severity = "HEALTHY"
+
+        result = {
+            "agent":           "MotorMind AI v1.0",
+            "timestamp":       reading["timestamp"],
+            "severity":        severity,
+            "status":          status_in,
+            "sensors":         {"rpm": rpm, "temperature_c": temperature_c,
+                                "vibration_mm_s": vibration_mm_s, "current_a": current_a,
+                                "voltage_v": voltage_v, "power_kw": reading["power_kw"]},
+            "faults_detected": len(rule_faults),
+            "fault_list":      rule_faults,
+            "diagnosis":       diagnosis,
+            "bpmn_route":      _get_bpmn_route(severity),
+        }
+        _state.update({"severity": severity, "status": status_in,
+                       "faults": ", ".join(rule_faults) or "NONE"})
+        return _json(result)
 
     port = int(os.environ.get("PORT", 8080))
-    print(f"MotorMind AI agent running on port {port}")
-    print(f"POST /  → run diagnosis")
-    print(f"GET  /health → health check")
-    server = http.server.HTTPServer(("0.0.0.0", port), AgentHandler)
-    server.serve_forever()
+    print(f"\n  MotorMind AI Agent — http://0.0.0.0:{port}")
+    print(f"  GET  /health              → health check")
+    print(f"  POST /api/diagnose        → full diagnosis (fault params)")
+    print(f"  GET  /api/latest          → latest sensor snapshot")
+    print(f"  POST /api/diagnose/live   → diagnosis from live sensor values\n")
+    _app.run(host="0.0.0.0", port=port, debug=False)
 
 
 # ─── CLI ENTRY POINT ──────────────────────────────────────────────────────────
