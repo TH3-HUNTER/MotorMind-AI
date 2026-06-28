@@ -1,7 +1,6 @@
 """
-MotorMind AI 
+MotorMind AI — UiPath Coded Agent
 Motor: 400V / 7.5kW / 1450 RPM 3-phase induction motor
-Returns structured JSON for UiPath Maestro BPMN orchestration
 """
 
 import json
@@ -32,17 +31,18 @@ T_RATED   = 75.0    # at full load
 PF        = 0.85
 EFFICIENCY = 0.91
 
-# Fault thresholds
+# Fault thresholds — IEC 60038 voltage, ISO 10816 vibration
 THRESHOLDS = {
-    "volt_warn":    360,
-    "volt_crit":    340,
-    "volt_high":    430,
-    "curr_warn":    17,
-    "curr_crit":    22,
-    "temp_warn":    80,
-    "temp_crit":    100,
-    "vib_warn":     4.5,
-    "vib_crit":     7.1,
+    "volt_warn_low":  380,   # IEC 60038: -5% of 400V
+    "volt_warn_high": 420,   # IEC 60038: +5% of 400V
+    "volt_crit_low":  360,   # IEC 60038: -10% of 400V
+    "volt_crit_high": 440,   # IEC 60038: +10% of 400V
+    "curr_warn":      17,
+    "curr_crit":      22,
+    "temp_warn":      80,
+    "temp_crit":      100,
+    "vib_warn":       4.5,   # ISO 10816-3 Zone B/C boundary
+    "vib_crit":       7.1,   # ISO 10816-3 Zone D boundary
 }
 
 
@@ -114,7 +114,7 @@ def simulate_motor(
     # Power (kW)
     power_kw = (math.sqrt(3) * voltage_v * current * PF) / 1000
 
-    # Status — priority order
+    # Status — priority order (IEC 60038 voltage thresholds)
     status = "HEALTHY"
     if fault_overcurrent or current > THRESHOLDS["curr_crit"]:
         status = "CRITICAL_OVERCURRENT"
@@ -122,14 +122,16 @@ def simulate_motor(
         status = "CRITICAL_OVERTEMPERATURE"
     elif fault_bearing or vib > THRESHOLDS["vib_crit"]:
         status = "WARNING_BEARING_FAULT"
-    elif voltage_v < THRESHOLDS["volt_crit"]:
-        status = "CRITICAL_UNDERVOLTAGE"
-    elif voltage_v < THRESHOLDS["volt_warn"]:
-        status = "WARNING_LOW_VOLTAGE"
+    elif voltage_v < THRESHOLDS["volt_crit_low"] or voltage_v > THRESHOLDS["volt_crit_high"]:
+        status = "CRITICAL_VOLTAGE"
+    elif voltage_v < THRESHOLDS["volt_warn_low"] or voltage_v > THRESHOLDS["volt_warn_high"]:
+        status = "WARNING_VOLTAGE"    
     elif temp > THRESHOLDS["temp_warn"]:
         status = "WARNING_HIGH_TEMP"
     elif current > THRESHOLDS["curr_warn"]:
         status = "WARNING_HIGH_CURRENT"
+    elif vib > THRESHOLDS["vib_warn"]:
+        status = "WARNING_HIGH_VIBRATION"
     elif rpm_setpoint < 50:
         status = "IDLE"
 
@@ -169,17 +171,19 @@ def detect_faults(readings: list[dict]) -> list[str]:
 
     faults = []
 
-    # ── Electrical rules ──────────────────────────────────────────────────────
-    # Rule 1
-    if volt < 360:
-        faults.append(f"LOW VOLTAGE {volt:.0f}V (rated {V_RATED:.0f}V, -"
-                       f"{((V_RATED-volt)/V_RATED*100):.0f}%)")
-    # Rule 2
-    if volt < 340:
-        faults.append(f"CRITICAL UNDERVOLTAGE {volt:.0f}V — winding damage risk")
-    # Rule 3
-    if volt > 430:
-        faults.append(f"OVERVOLTAGE {volt:.0f}V — insulation stress")
+    # ── Electrical rules (IEC 60038) ──────────────────────────────────────────
+    # Rule 1 — undervoltage warning (-5%)
+    if volt < THRESHOLDS["volt_warn_low"]:
+        faults.append(f"LOW VOLTAGE {volt:.0f}V (IEC 60038: rated {V_RATED:.0f}V ±5%, limit 380V, -{((V_RATED-volt)/V_RATED*100):.1f}%)")
+    # Rule 2 — undervoltage critical (-10%)
+    if volt < THRESHOLDS["volt_crit_low"]:
+        faults.append(f"CRITICAL UNDERVOLTAGE {volt:.0f}V (IEC 60038 -10% limit 360V) — winding damage risk")
+    # Rule 3 — overvoltage warning (+5%)
+    if volt > THRESHOLDS["volt_warn_high"]:
+        faults.append(f"HIGH VOLTAGE {volt:.0f}V (IEC 60038: rated {V_RATED:.0f}V ±5%, limit 420V, +{((volt-V_RATED)/V_RATED*100):.1f}%)")
+    # Rule 3b — overvoltage critical (+10%)
+    if volt > THRESHOLDS["volt_crit_high"]:
+        faults.append(f"CRITICAL OVERVOLTAGE {volt:.0f}V (IEC 60038 +10% limit 440V) — insulation failure risk")
     # Rule 4
     if curr > 18:
         faults.append(f"OVERCURRENT {curr:.1f}A (rated {I_RATED}A, "
