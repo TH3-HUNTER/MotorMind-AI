@@ -1,7 +1,3 @@
-"""
-MotorMind AI — Web Interface v3
-Fixed: non-blocking diagnosis, 1s live sensor updates, logo, all previous fixes
-"""
 from flask import Flask, render_template_string, request, jsonify
 import json, os, sys, threading
 
@@ -388,7 +384,8 @@ function updateTrendBars() {
   const volts = history.map(r=>parseFloat(r.voltage_v||400));
   const lv = volts[volts.length-1];
   const voltPct = Math.min(100,(lv/440)*100);
-  const voltColor = (lv<340||lv>430)?'#ef4444':(lv<360||lv>420)?'#f59e0b':'#22c55e';
+  // IEC 60038: nominal 400V ±5% = 380-420V (warning), ±10% = 360-440V (critical)
+  const voltColor = (lv<360||lv>440)?'#ef4444':(lv<380||lv>420)?'#f59e0b':'#22c55e';
   const vb = document.getElementById('tr-volt');
   if (vb) { vb.style.width=voltPct+'%'; vb.style.background=voltColor; }
   const vt = trendArrow(volts);
@@ -457,8 +454,8 @@ function updateMetrics(sensors, status) {
   document.getElementById('m-vib').className='metric-value '+(v>=7.1?'crit':v>=4.5?'warn':sc==='healthy'?'ok':'');
   document.getElementById('mc-curr').className='metric-card '+(c>=22?'crit':c>=17?'warn':'');
   document.getElementById('m-curr').className='metric-value '+(c>=22?'crit':c>=17?'warn':sc==='healthy'?'ok':'');
-  document.getElementById('mc-volt').className='metric-card '+(vol<=340?'crit':vol<=360?'warn':'');
-  document.getElementById('m-volt').className='metric-value '+(vol<=340?'crit':vol<=360?'warn':sc==='healthy'?'ok':'');
+  document.getElementById('mc-volt').className='metric-card '+(vol<=360||vol>=440?'crit':vol<=380||vol>=420?'warn':'');
+  document.getElementById('m-volt').className='metric-value '+(vol<=360||vol>=440?'crit':vol<=380||vol>=420?'warn':sc==='healthy'?'ok':'');
 
   if (history.length>=2) {
     [['mt-rpm','rpm'],['mt-temp','temperature_c'],['mt-vib','vibration_mm_s'],
@@ -549,7 +546,7 @@ async function runDiagnosis(silent=false) {
   resetCountdown();
 }
 
-// FAST SENSOR UPDATE — every 1 second, no Gemini call
+// FAST SENSOR UPDATE — every 0.5 seconds, no Gemini call
 async function fetchLiveSensors() {
   const payload = {
     load_pct: parseFloat(document.getElementById('load').value),
@@ -567,11 +564,47 @@ async function fetchLiveSensors() {
     animateValue('m-curr', s.current_a);
     animateValue('m-volt', s.voltage_v);
     animateValue('m-pow',  s.power_kw);
-    history.push(s); if(history.length>20)history.shift();
+    history.push(s); if(history.length>60)history.shift();
     updateTrendBars();
     checkHistoryAnomalies();
     updateMetrics(s, s.status||'HEALTHY');
+
+    // ── Update status card in real-time (every 0.5s, not just on diagnosis) ──
+    const liveStatus = computeLiveStatus(s);
+    const sc = sevClass(liveStatus);
+    const card = document.getElementById('status-card');
+    if (card) {
+      card.className = 'status-card ' + sc;
+      const titles = {healthy:'✓ Motor Healthy', warning:'⚠ Warning Detected', critical:'🔴 Critical Fault'};
+      const titleEl = document.getElementById('status-title');
+      const subEl   = document.getElementById('status-sub');
+      if (titleEl) titleEl.textContent = titles[sc] || '—';
+      if (subEl)   subEl.textContent   = liveStatus.replace(/_/g,' ');
+      const sideEl = document.getElementById('sidebar-status');
+      if (sideEl)  sideEl.textContent  = titles[sc] || '—';
+    }
   } catch(e) {}
+}
+
+// Compute live status using IEC 60038 thresholds (mirrors motor_agent.py logic)
+function computeLiveStatus(s) {
+  const v   = parseFloat(s.voltage_v||400);
+  const i   = parseFloat(s.current_a||0);
+  const t   = parseFloat(s.temperature_c||25);
+  const vib = parseFloat(s.vibration_mm_s||0);
+  const rpm = parseFloat(s.rpm||0);
+  const st  = s.status || '';
+  // Match exact priority order from motor_agent.py
+  if (st.includes('CRITICAL') || i > 22)        return 'CRITICAL_OVERCURRENT';
+  if (t > 100)                                   return 'CRITICAL_OVERTEMPERATURE';
+  if (vib > 7.1)                                 return 'WARNING_BEARING_FAULT';
+  if (v < 360 || v > 440)                        return 'CRITICAL_VOLTAGE';
+  if (v < 380 || v > 420)                        return 'WARNING_VOLTAGE';
+  if (t > 80)                                    return 'WARNING_HIGH_TEMP';
+  if (i > 17)                                    return 'WARNING_HIGH_CURRENT';
+  if (vib > 4.5)                                 return 'WARNING_HIGH_VIBRATION';
+  if (rpm < 50)                                  return 'IDLE';
+  return 'HEALTHY';
 }
 
 function resetCountdown() {
@@ -669,7 +702,7 @@ async function clearLog() {
 window.addEventListener('load', ()=>{
   setTimeout(()=>runDiagnosis(), 400);
   resetCountdown();
-  setInterval(fetchLiveSensors, 1000);
+  setInterval(fetchLiveSensors, 500);
   setInterval(refreshLog, 10000);
   setTimeout(refreshLog, 3000);
 });
@@ -712,6 +745,10 @@ def api_sensors():
             "status":         reading["status"],
             "timestamp":      reading["timestamp"],
         })
+    with _history_lock:
+        _sensor_history.append(reading)
+        if len(_sensor_history) > 60:
+            _sensor_history.pop(0)
     return jsonify(reading)
 
 @app.route("/api/diagnose", methods=["POST"])
@@ -757,13 +794,7 @@ def api_latest():
 
 @app.route("/api/uipath/trigger", methods=["POST"])
 def api_uipath_trigger():
-    """
-    UiPath calls this to trigger a full diagnosis from BPMN.
-    Same as /api/diagnose but accepts the 7 UiPath agent input fields directly.
-    Returns severity + diagnosis + bpmn_route for gateway routing.
-    """
     data = request.get_json(force=True, silent=True) or {}
-    # Accept either fault-injection params OR raw sensor values
     if "fault_bearing" in data or "load_pct" in data:
         result = run_diagnosis(
             load_pct           = float(data.get("load_pct", 70)),
@@ -775,12 +806,43 @@ def api_uipath_trigger():
             fault_voltage_drop = bool(data.get("fault_voltage_drop", False)),
         )
     else:
-        # Called with live sensor values from the web dashboard
         with _state_lock:
             snap = dict(_latest_state)
         result = run_diagnosis(voltage_v=snap["voltage_v"])
     log_fault_event(result)
     return jsonify(result)
+
+
+# ── Server-side sensor history (last 60 readings = 60 seconds) ──────────────
+_sensor_history = []
+_history_lock   = _threading.Lock()
+
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    """Returns last 60s of sensor readings for UiPath Agent context."""
+    with _history_lock:
+        return jsonify({"count": len(_sensor_history), "readings": list(_sensor_history)})
+
+
+@app.route("/api/uipath/human-task", methods=["POST"])
+def api_uipath_human_task():
+    """
+    Called by UiPath BPMN when a human task is completed.
+    Records the engineer decision in the fault log.
+    Body: { "severity": "WARNING"|"CRITICAL", "action": "Acknowledged"|"Shutdown Approved",
+            "comment": "...", "engineer": "..." }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    entry = {
+        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "type":       "HUMAN_DECISION",
+        "severity":   data.get("severity", ""),
+        "action":     data.get("action", ""),
+        "comment":    data.get("comment", ""),
+        "engineer":   data.get("engineer", "maintenance@motormind.ai"),
+    }
+    fault_log.append(entry)
+    return jsonify({"status": "recorded", "entry": entry})
 
 @app.route("/api/log")
 def api_log():
