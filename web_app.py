@@ -1,7 +1,3 @@
-"""
-MotorMind AI — Web Interface v3
-Fixed: non-blocking diagnosis, 1s live sensor updates, logo, all previous fixes
-"""
 from flask import Flask, render_template_string, request, jsonify
 import json, os, sys, threading
 
