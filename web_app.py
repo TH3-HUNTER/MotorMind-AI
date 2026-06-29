@@ -438,7 +438,6 @@ function applyMotorState(data) {
     badge.className='motor-status-badge msb-running'; badge.textContent='● MOTOR RUNNING';
     btnStart.disabled=true; btnStop.disabled=false; btnEmerg.disabled=false;
     card.className='status-card healthy';
-    title.textContent='✓ Motor Running'; sub.textContent='All parameters nominal';
     sideEl.textContent='✓ Motor Running';
   } else if (data.ramping_down) {
     badge.className='motor-status-badge msb-stopping'; badge.textContent='⟳ STOPPING...';
