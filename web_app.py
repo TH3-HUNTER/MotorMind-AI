@@ -24,6 +24,16 @@ _latest_state = {
 # In-memory fault log (WARNING and CRITICAL events only)
 fault_log = []
 
+# ── Motor control state ──────────────────────────────────────────────────────
+_motor_state = {
+    "running": True,         # True = motor running, False = stopped
+    "shutdown_requested": False,  # True = UiPath sent emergency shutdown
+    "shutdown_reason": "",
+}
+
+# ── UiPath commands/messages log ─────────────────────────────────────────────
+_uipath_log = []   # messages from UiPath (human decisions, comments, alerts)
+
 def log_fault_event(result):
     """Log WARNING/CRITICAL events to in-memory log."""
     status = result.get("status","")
@@ -219,6 +229,34 @@ input[type=range]::-webkit-slider-thumb:hover { transform:scale(1.2); }
 .send-btn { background:linear-gradient(135deg,#2563eb,#0ea5e9); color:#fff; border:none; padding:9px 16px; border-radius:9px; cursor:pointer; font-size:0.8rem; font-weight:700; transition:all 0.2s; }
 .send-btn:hover { transform:scale(1.05); }
 
+/* MOTOR CONTROL BUTTONS */
+.motor-controls { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-bottom:10px; }
+.ctrl-btn { padding:10px 6px; border:none; border-radius:9px; font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.25s; display:flex; align-items:center; justify-content:center; gap:5px; }
+.ctrl-btn.start  { background:linear-gradient(135deg,#16a34a,#22c55e); color:#fff; box-shadow:0 3px 10px rgba(22,163,74,0.35); }
+.ctrl-btn.stop   { background:linear-gradient(135deg,#64748b,#94a3b8); color:#fff; box-shadow:0 3px 10px rgba(100,116,139,0.3); }
+.ctrl-btn.start:hover  { transform:translateY(-1px); box-shadow:0 5px 15px rgba(22,163,74,0.5); }
+.ctrl-btn.stop:hover   { transform:translateY(-1px); }
+.ctrl-btn:disabled { opacity:0.45; cursor:not-allowed; transform:none !important; }
+.shutdown-btn { width:100%; padding:11px; border:none; border-radius:9px; font-size:0.82rem; font-weight:800; cursor:pointer; transition:all 0.25s; background:linear-gradient(135deg,#dc2626,#ef4444); color:#fff; box-shadow:0 4px 14px rgba(220,38,38,0.4); margin-bottom:10px; letter-spacing:0.5px; animation:none; }
+.shutdown-btn:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(220,38,38,0.55); }
+.shutdown-btn.active { animation:shutdown-pulse 1s infinite; }
+@keyframes shutdown-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.6);} 50%{box-shadow:0 0 0 8px rgba(220,38,38,0);} }
+.motor-status-badge { text-align:center; padding:5px 0; font-size:0.72rem; font-weight:700; border-radius:7px; margin-bottom:8px; }
+.motor-status-badge.running { background:#f0fdf4; color:#16a34a; border:1px solid #86efac; }
+.motor-status-badge.stopped { background:#fef2f2; color:#dc2626; border:1px solid #fca5a5; }
+.motor-status-badge.shutdown { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; animation:shutdown-pulse 1s infinite; }
+
+/* UIPATH LOG */
+.uipath-log { background:#fff; border-radius:12px; padding:12px; border:1px solid #bfdbfe; margin-top:10px; }
+.uipath-log-title { font-size:0.65rem; font-weight:700; color:#2563eb; letter-spacing:2px; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+.uipath-log-entries { max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:5px; }
+.uipath-entry { padding:6px 10px; border-radius:7px; font-size:0.72rem; border-left:3px solid; }
+.uipath-entry.shutdown  { background:#fff1f2; border-color:#ef4444; color:#991b1b; }
+.uipath-entry.warning   { background:#fffbeb; border-color:#f59e0b; color:#92400e; }
+.uipath-entry.info      { background:#eff6ff; border-color:#2563eb; color:#1e40af; }
+.uipath-entry.approved  { background:#f0fdf4; border-color:#22c55e; color:#15803d; }
+.uipath-entry .entry-time { font-size:0.62rem; color:#94a3b8; margin-bottom:2px; }
+.uipath-entry .entry-msg  { font-weight:600; }
 /* LOADING STATE */
 .diag-loading { display:flex; align-items:center; gap:10px; padding:20px; color:#94a3b8; font-size:0.82rem; }
 .diag-spinner { width:20px; height:20px; border:2px solid #e2e8f0; border-top-color:#2563eb; border-radius:50%; animation:spin 0.8s linear infinite; }
@@ -264,6 +302,27 @@ input[type=range]::-webkit-slider-thumb:hover { transform:scale(1.2); }
     </div>
     <button class="run-btn" id="run-btn" onclick="runDiagnosis()">▶ RUN DIAGNOSIS</button>
     <div class="auto-badge">Auto AI refresh in <span class="countdown" id="countdown">30</span>s · sensors every 1s</div>
+    <div class="divider"></div>
+
+    <!-- MOTOR CONTROL -->
+    <div class="sidebar-title">🔌 Motor Control</div>
+    <div id="motor-status-badge" class="motor-status-badge running">● MOTOR RUNNING</div>
+    <div class="motor-controls">
+      <button class="ctrl-btn start" id="btn-start" onclick="motorControl('start')">▶ Start</button>
+      <button class="ctrl-btn stop"  id="btn-stop"  onclick="motorControl('stop')">⏹ Stop</button>
+    </div>
+    <button class="shutdown-btn" id="btn-shutdown" onclick="motorControl('shutdown')">
+      🚨 URGENT SHUTDOWN
+    </button>
+    <div class="divider"></div>
+
+    <!-- UIPATH MESSAGES LOG -->
+    <div class="uipath-log">
+      <div class="uipath-log-title">🔗 UiPath Messages</div>
+      <div class="uipath-log-entries" id="uipath-log-entries">
+        <div class="no-uipath-msg">No messages from UiPath yet</div>
+      </div>
+    </div>
     <div class="divider"></div>
     <div class="trend-section">
       <div class="trend-title">📈 Live Trends</div>
@@ -384,8 +443,7 @@ function updateTrendBars() {
   const volts = history.map(r=>parseFloat(r.voltage_v||400));
   const lv = volts[volts.length-1];
   const voltPct = Math.min(100,(lv/440)*100);
-  // IEC 60038: nominal 400V ±5% = 380-420V (warning), ±10% = 360-440V (critical)
-  const voltColor = (lv<360||lv>440)?'#ef4444':(lv<380||lv>420)?'#f59e0b':'#22c55e';
+  const voltColor = (lv<340||lv>430)?'#ef4444':(lv<360||lv>420)?'#f59e0b':'#22c55e';
   const vb = document.getElementById('tr-volt');
   if (vb) { vb.style.width=voltPct+'%'; vb.style.background=voltColor; }
   const vt = trendArrow(volts);
@@ -454,8 +512,8 @@ function updateMetrics(sensors, status) {
   document.getElementById('m-vib').className='metric-value '+(v>=7.1?'crit':v>=4.5?'warn':sc==='healthy'?'ok':'');
   document.getElementById('mc-curr').className='metric-card '+(c>=22?'crit':c>=17?'warn':'');
   document.getElementById('m-curr').className='metric-value '+(c>=22?'crit':c>=17?'warn':sc==='healthy'?'ok':'');
-  document.getElementById('mc-volt').className='metric-card '+(vol<=360||vol>=440?'crit':vol<=380||vol>=420?'warn':'');
-  document.getElementById('m-volt').className='metric-value '+(vol<=360||vol>=440?'crit':vol<=380||vol>=420?'warn':sc==='healthy'?'ok':'');
+  document.getElementById('mc-volt').className='metric-card '+(vol<=340?'crit':vol<=360?'warn':'');
+  document.getElementById('m-volt').className='metric-value '+(vol<=340?'crit':vol<=360?'warn':sc==='healthy'?'ok':'');
 
   if (history.length>=2) {
     [['mt-rpm','rpm'],['mt-temp','temperature_c'],['mt-vib','vibration_mm_s'],
@@ -546,7 +604,7 @@ async function runDiagnosis(silent=false) {
   resetCountdown();
 }
 
-// FAST SENSOR UPDATE — every 0.5 seconds, no Gemini call
+// FAST SENSOR UPDATE — every 1 second, no Gemini call
 async function fetchLiveSensors() {
   const payload = {
     load_pct: parseFloat(document.getElementById('load').value),
@@ -564,50 +622,76 @@ async function fetchLiveSensors() {
     animateValue('m-curr', s.current_a);
     animateValue('m-volt', s.voltage_v);
     animateValue('m-pow',  s.power_kw);
-    history.push(s); if(history.length>60)history.shift();
+    history.push(s); if(history.length>20)history.shift();
     updateTrendBars();
     checkHistoryAnomalies();
     updateMetrics(s, s.status||'HEALTHY');
-
-    // ── Update status card in real-time (every 0.5s, not just on diagnosis) ──
-    const liveStatus = computeLiveStatus(s);
-    const sc = sevClass(liveStatus);
-    const card = document.getElementById('status-card');
-    if (card) {
-      card.className = 'status-card ' + sc;
-      const titles = {healthy:'✓ Motor Healthy', warning:'⚠ Warning Detected', critical:'🔴 Critical Fault'};
-      const titleEl = document.getElementById('status-title');
-      const subEl   = document.getElementById('status-sub');
-      if (titleEl) titleEl.textContent = titles[sc] || '—';
-      if (subEl)   subEl.textContent   = liveStatus.replace(/_/g,' ');
-      const sideEl = document.getElementById('sidebar-status');
-      if (sideEl)  sideEl.textContent  = titles[sc] || '—';
-    }
   } catch(e) {}
 }
 
-// Compute live status using IEC 60038 thresholds (mirrors motor_agent.py logic)
-function computeLiveStatus(s) {
-  const v   = parseFloat(s.voltage_v||400);
-  const i   = parseFloat(s.current_a||0);
-  const t   = parseFloat(s.temperature_c||25);
-  const vib = parseFloat(s.vibration_mm_s||0);
-  const rpm = parseFloat(s.rpm||0);
-  const st  = s.status || '';
-  // Match exact priority order from motor_agent.py
-  if (st.includes('CRITICAL') || i > 22)        return 'CRITICAL_OVERCURRENT';
-  if (t > 100)                                   return 'CRITICAL_OVERTEMPERATURE';
-  if (vib > 7.1)                                 return 'WARNING_BEARING_FAULT';
-  if (v < 360 || v > 440)                        return 'CRITICAL_VOLTAGE';
-  if (v < 380 || v > 420)                        return 'WARNING_VOLTAGE';
-  if (t > 80)                                    return 'WARNING_HIGH_TEMP';
-  if (i > 17)                                    return 'WARNING_HIGH_CURRENT';
-  if (vib > 4.5)                                 return 'WARNING_HIGH_VIBRATION';
-  if (rpm < 50)                                  return 'IDLE';
-  return 'HEALTHY';
+async function motorControl(action) {
+  try {
+    const resp = await fetch('/api/motor/control', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({action: action, source: 'dashboard'})
+    });
+    const data = await resp.json();
+    updateMotorStatusBadge(data.running, data.shutdown_requested);
+    appendMsg('agent', 'System', data.message);
+  } catch(e) {}
 }
 
-function resetCountdown() {
+function updateMotorStatusBadge(running, shutdown) {
+  const badge = document.getElementById('motor-status-badge');
+  const startBtn = document.getElementById('btn-start');
+  const stopBtn = document.getElementById('btn-stop');
+  const shutdownBtn = document.getElementById('btn-shutdown');
+  if (shutdown) {
+    badge.className = 'motor-status-badge shutdown';
+    badge.textContent = '🚨 EMERGENCY SHUTDOWN';
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    shutdownBtn.classList.add('active');
+  } else if (running) {
+    badge.className = 'motor-status-badge running';
+    badge.textContent = '● MOTOR RUNNING';
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    shutdownBtn.classList.remove('active');
+  } else {
+    badge.className = 'motor-status-badge stopped';
+    badge.textContent = '⏹ MOTOR STOPPED';
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    shutdownBtn.classList.remove('active');
+  }
+}
+
+async function refreshUiPathLog() {
+  try {
+    const resp = await fetch('/api/uipath/log');
+    const data = await resp.json();
+    const container = document.getElementById('uipath-log-entries');
+    if (!data.messages || data.messages.length === 0) {
+      container.innerHTML = '<div class="no-uipath-msg">No messages from UiPath yet</div>';
+      return;
+    }
+    container.innerHTML = data.messages.slice().reverse().map(m => {
+      const cls = m.type === 'shutdown' ? 'shutdown' : m.type === 'critical' ? 'shutdown' :
+                  m.type === 'warning' ? 'warning' : m.type === 'approved' ? 'approved' : 'info';
+      return `<div class="uipath-entry ${cls}">
+        <div class="entry-time">${m.timestamp} · UiPath Maestro</div>
+        <div class="entry-msg">${m.message}</div>
+        ${m.comment ? `<div style="font-size:0.68rem;color:#64748b;margin-top:2px">💬 ${m.comment}</div>` : ''}
+      </div>`;
+    }).join('');
+    // Also update motor state
+    if (data.motor_running !== undefined) {
+      updateMotorStatusBadge(data.motor_running, data.shutdown_requested);
+    }
+  } catch(e) {}
+}
   countdown = 30;
   if (countdownTimer) clearInterval(countdownTimer);
   countdownTimer = setInterval(()=>{
@@ -702,9 +786,11 @@ async function clearLog() {
 window.addEventListener('load', ()=>{
   setTimeout(()=>runDiagnosis(), 400);
   resetCountdown();
-  setInterval(fetchLiveSensors, 500);
+  setInterval(fetchLiveSensors, 1000);
   setInterval(refreshLog, 10000);
+  setInterval(refreshUiPathLog, 3000);
   setTimeout(refreshLog, 3000);
+  setTimeout(refreshUiPathLog, 1000);
 });
 </script>
 </body>
@@ -745,10 +831,6 @@ def api_sensors():
             "status":         reading["status"],
             "timestamp":      reading["timestamp"],
         })
-    with _history_lock:
-        _sensor_history.append(reading)
-        if len(_sensor_history) > 60:
-            _sensor_history.pop(0)
     return jsonify(reading)
 
 @app.route("/api/diagnose", methods=["POST"])
@@ -794,7 +876,13 @@ def api_latest():
 
 @app.route("/api/uipath/trigger", methods=["POST"])
 def api_uipath_trigger():
+    """
+    UiPath calls this to trigger a full diagnosis from BPMN.
+    Same as /api/diagnose but accepts the 7 UiPath agent input fields directly.
+    Returns severity + diagnosis + bpmn_route for gateway routing.
+    """
     data = request.get_json(force=True, silent=True) or {}
+    # Accept either fault-injection params OR raw sensor values
     if "fault_bearing" in data or "load_pct" in data:
         result = run_diagnosis(
             load_pct           = float(data.get("load_pct", 70)),
@@ -806,43 +894,93 @@ def api_uipath_trigger():
             fault_voltage_drop = bool(data.get("fault_voltage_drop", False)),
         )
     else:
+        # Called with live sensor values from the web dashboard
         with _state_lock:
             snap = dict(_latest_state)
         result = run_diagnosis(voltage_v=snap["voltage_v"])
     log_fault_event(result)
     return jsonify(result)
 
+@app.route("/api/motor/control", methods=["POST"])
+def api_motor_control():
+    data    = request.get_json(force=True, silent=True) or {}
+    action  = data.get("action", "").lower()
+    source  = data.get("source", "dashboard")
+    comment = data.get("comment", "")
+    with _state_lock:
+        if action == "start":
+            _motor_state["running"] = True
+            _motor_state["shutdown_requested"] = False
+            _motor_state["shutdown_reason"] = ""
+            msg = "Motor started by operator."; mtype = "info"
+        elif action == "stop":
+            _motor_state["running"] = False
+            _motor_state["shutdown_requested"] = False
+            msg = "Motor stopped by operator."; mtype = "info"
+        elif action == "shutdown":
+            _motor_state["running"] = False
+            _motor_state["shutdown_requested"] = True
+            _motor_state["shutdown_reason"] = comment or "Emergency shutdown triggered"
+            msg = f"🚨 EMERGENCY SHUTDOWN — {_motor_state['shutdown_reason']}"; mtype = "shutdown"
+        else:
+            return jsonify({"error": "Unknown action"}), 400
+        state = dict(_motor_state)
+    if source == "uipath" or action == "shutdown":
+        _uipath_log.append({"timestamp": datetime.now().strftime("%H:%M:%S"),
+                             "type": mtype, "message": msg, "comment": comment, "source": source})
+    return jsonify({"status": "ok", "action": action, "running": state["running"],
+                    "shutdown_requested": state["shutdown_requested"], "message": msg})
 
-# ── Server-side sensor history (last 60 readings = 60 seconds) ──────────────
-_sensor_history = []
-_history_lock   = _threading.Lock()
 
-@app.route("/api/history", methods=["GET"])
-def api_history():
-    """Returns last 60s of sensor readings for UiPath Agent context."""
-    with _history_lock:
-        return jsonify({"count": len(_sensor_history), "readings": list(_sensor_history)})
+@app.route("/api/uipath/log", methods=["GET"])
+def api_uipath_log():
+    with _state_lock:
+        state = dict(_motor_state)
+    return jsonify({"messages": list(_uipath_log),
+                    "motor_running": state["running"],
+                    "shutdown_requested": state["shutdown_requested"]})
 
 
 @app.route("/api/uipath/human-task", methods=["POST"])
 def api_uipath_human_task():
-    """
-    Called by UiPath BPMN when a human task is completed.
-    Records the engineer decision in the fault log.
-    Body: { "severity": "WARNING"|"CRITICAL", "action": "Acknowledged"|"Shutdown Approved",
-            "comment": "...", "engineer": "..." }
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    entry = {
-        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "type":       "HUMAN_DECISION",
-        "severity":   data.get("severity", ""),
-        "action":     data.get("action", ""),
-        "comment":    data.get("comment", ""),
-        "engineer":   data.get("engineer", "maintenance@motormind.ai"),
-    }
-    fault_log.append(entry)
-    return jsonify({"status": "recorded", "entry": entry})
+    data     = request.get_json(force=True, silent=True) or {}
+    action   = data.get("action", "")
+    severity = data.get("severity", "")
+    comment  = data.get("comment", "")
+    diagnosis = data.get("diagnosis", "")
+    if "shutdown" in action.lower() or severity == "CRITICAL":
+        mtype = "shutdown"
+        msg   = f"🚨 CRITICAL from UiPath — {action}"
+        if "shutdown" in action.lower():
+            with _state_lock:
+                _motor_state["shutdown_requested"] = True
+                _motor_state["running"] = False
+                _motor_state["shutdown_reason"] = f"UiPath: {comment or 'Emergency'}"
+    elif severity == "WARNING" or "review" in action.lower() or "pending" in action.lower():
+        mtype = "warning"
+        msg   = f"⚠ WARNING from UiPath — {action}"
+    elif action in ("Approved", "ApproveResolution", "ApproveShutdown"):
+        mtype = "approved"
+        msg   = f"✅ Engineer approved: {comment or action}"
+    else:
+        mtype = "info"
+        msg   = f"ℹ UiPath: {action}"
+    entry = {"timestamp": datetime.now().strftime("%H:%M:%S"), "type": mtype,
+             "message": msg, "comment": comment or (diagnosis[:80] if diagnosis else ""),
+             "source": "uipath", "action": action, "severity": severity}
+    _uipath_log.append(entry)
+    if len(_uipath_log) > 50: _uipath_log.pop(0)
+    fault_log.append({"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                       "severity": severity or "INFO", "status": f"UIPATH_{action.upper()}",
+                       "voltage_v":"","current_a":"","temperature_c":"","vibration_mm_s":"",
+                       "rpm":"","power_kw":"","faults": comment,
+                       "ai_status": diagnosis[:100] if diagnosis else "", "ai_risk":"", "bpmn_route": action})
+    with _state_lock:
+        state = dict(_motor_state)
+    return jsonify({"status": "recorded", "entry": entry,
+                    "motor_running": state["running"],
+                    "shutdown_requested": state["shutdown_requested"]})
+
 
 @app.route("/api/log")
 def api_log():
