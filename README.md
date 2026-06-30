@@ -1,63 +1,96 @@
-# ⚙ FactoryGuard AI — UiPath AgentHack 2026
+# MotorMind AI
 
-**Real-time predictive maintenance agent for industrial motors, orchestrated by UiPath Maestro BPMN**
+**Real-time predictive maintenance for 3-phase industrial motors, orchestrated by UiPath Maestro BPMN.**
 
-Track: **UiPath Maestro BPMN (Track 2)**
-Developer: **Hamza Manai** — Electrical Engineering / Industry 4.0, Tunisia
+UiPath AgentHack 2026 — Track 2: Maestro BPMN
+Built by Hamza Manai — Electrical Engineering / Mechatronics
 
----
-
-## The Problem
-
-Industrial motor failures cost factories thousands of dollars per hour in unplanned downtime. Existing monitoring systems display values and alarms — but they don't explain *why* a fault happened, *what to do next*, or *who needs to approve the action*. Engineers lose time diagnosing problems that an AI agent could solve in seconds.
-
-## The Solution
-
-FactoryGuard AI is a **multi-agent BPMN-orchestrated maintenance system** built on UiPath Maestro. It continuously monitors a 3-phase industrial motor, detects faults using a 23-rule physics-based engine, calls an AI diagnostic agent for root cause analysis, and routes the result through a governed BPMN process — notifying engineers, creating human approval tasks, and executing corrective actions automatically.
+[Live Demo](http://8.216.39.121:5000) · Built with Claude (Anthropic) as a coding assistant throughout development
 
 ---
 
-## BPMN Process Flow
+## Project Description
 
-```
-[START: Motor Sensor Reading]
-          ↓
-[Coded Agent: Physics Simulation + 23-Rule Fault Engine]
-          ↓
-[AI Agent: Gemini Diagnosis → STATUS / ROOT CAUSE / ACTIONS / RISK]
-          ↓
-    [Decision: Severity?]
-    ↓           ↓           ↓
-[HEALTHY]  [WARNING]   [CRITICAL]
-    ↓           ↓           ↓
-[Log OK]  [Human Task: [Auto-Alert +
-[Wait 60s] Engineer    Human Approval
-           Reviews]    for Shutdown]
-    ↓           ↓           ↓
-         [Action Executed + Incident Logged]
-                    ↓
-                  [END]
-```
+### The Problem
+
+3-phase induction motors power roughly 70% of all industrial processes worldwide. A single unplanned motor failure costs $50,000–$260,000 per hour in lost production. Traditional monitoring systems only alarm **after** the failure has already occurred — by then it's too late to prevent downtime.
+
+Motors give early warning signals 30–90 minutes before catastrophic failure: voltage drops, temperature rises, vibration anomalies. No human can monitor six sensor channels simultaneously, 24/7. And without governance, there's no guarantee the right engineer gets the right information at the right time.
+
+### What MotorMind AI Does
+
+MotorMind AI is a real-time predictive maintenance agent that:
+
+1. **Simulates a real 3-phase motor** (400V / 7.5kW / 1450 RPM) using actual electrical engineering equations — not random noise. Voltage drop genuinely causes current rise, current rise genuinely causes I²R heating, exactly like a real motor.
+
+2. **Detects faults using 23 physics-based rules** compliant with **IEC 60038** (voltage standard) and **ISO 10816-3** (vibration severity zones) — the same standards used in real industrial maintenance.
+
+3. **Diagnoses root causes with Gemini AI**, reasoning like a senior electrical engineer: STATUS → OBSERVATIONS → ROOT CAUSE → RECOMMENDED ACTIONS → RISK ASSESSMENT.
+
+4. **Orchestrates the full response through UiPath Maestro BPMN** — fetching live sensor data, running AI diagnosis, and routing the outcome through an Exclusive Gateway: HEALTHY logs automatically, WARNING triggers an engineer review, CRITICAL requires human approval before any shutdown action.
+
+5. **Provides a live web dashboard** with motor start/stop/emergency-shutdown controls (with realistic ramp-up and ramp-down physics), 0.5-second sensor updates, live trend visualization, AI diagnosis output, and a real-time log of every message UiPath sends back.
+
+The result is a governed, auditable predictive maintenance pipeline — not just a dashboard that shows information, but a system that routes decisions to the right person and records every step.
 
 ---
 
 ## UiPath Components Used
 
-| Component | How it's used |
-|-----------|--------------|
-| **UiPath Maestro BPMN** | Orchestrates the full motor monitoring process — agents, human tasks, decisions, and logging |
-| **UiPath Agent Builder** | Hosts the FactoryGuard AI conversational agent — engineers can ask questions about motor health |
-| **UiPath Coded Agent (Python SDK)** | Core motor physics engine + 23-rule fault detection + Gemini AI diagnosis |
-| **UiPath Human Tasks** | Engineer review and approval workflow on WARNING/CRITICAL faults |
-| **UiPath API Workflows** | Connects the coded agent to Maestro and external notification systems |
+| Component | Role in MotorMind AI |
+|---|---|
+| **UiPath Maestro BPMN** | Core orchestration layer. Models the full process: Fetch Motor Data → MotorMind Diagnosis Agent → Check Fault Severity (Exclusive Gateway) → route to Log / Engineer Review / Emergency Alert → 30-second loop back |
+| **UiPath Agent Builder** | Defines the MotorMind Diagnosis Agent — receives 7 sensor inputs (voltage_v, current_a, temperature_c, vibration_mm_s, rpm, status, faults), runs the configured LLM, returns structured `severity` and `diagnosis` outputs consumed by the BPMN gateway |
+| **HTTP / Web API Connector** | Used inside a Send Task to call our external Flask API (`/api/latest`, `/api/diagnose`, `/api/uipath/human-task`) hosted on Alibaba Cloud — the bridge between UiPath and the Python physics/AI engine |
+| **Studio Web (Solution Explorer)** | Used to build, debug, and manage the Agent, the Maestro BPMN process, and the SimpleApprovalApp together as a single solution |
+| **Orchestrator** | Deployment target for the published solution; execution trail, step variables, and job history were used throughout development to debug the agent and the BPMN flow |
+| **UiPath Action Apps (SimpleApprovalApp)** | Built and configured (ActionSchema, outcomes: Approve/Reject, input properties for diagnosis and severity) for human task review — see *Known Limitations* below regarding Action Center availability on the hackathon tenant |
 
 ---
 
 ## Agent Type
 
-This solution uses **both**:
-- **Coded Agent** (Python) — the motor physics simulation, fault detection engine, and Gemini AI call
-- **Low-code Agent** (UiPath Agent Builder) — the conversational interface for engineer Q&A
+**This solution uses a Low-Code Agent (UiPath Agent Builder), combined with an external Coded Agent (Python + Gemini) called via HTTP.**
+
+Specifically:
+
+- The **MotorMind Diagnosis Agent** is a **Low-Code Agent** built in UiPath Agent Builder, with a defined system prompt, user prompt, I/O schema (7 typed inputs, 2 typed outputs), and model configuration.
+- The **physics simulation and 23-rule fault engine** is a **Coded Agent** — a custom Python application (`motor_agent.py`) implementing real motor equations and IEC 60038 / ISO 10816 compliant thresholds, deployed independently and exposed via a public REST API.
+- These two agents are connected through UiPath's HTTP/Web API connector, demonstrating the hybrid architecture the hackathon explicitly encourages: *"bring in agents built on external frameworks."* UiPath is the orchestration and governance layer; the external Python agent is the domain-specific physics/AI engine it calls.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────┐
+│   Motor Simulator        │   6 sensors, updated every 1s
+│   (Python physics model) │
+└───────────┬──────────────┘
+            │
+┌───────────▼──────────────┐
+│  Flask App + 23-Rule       │   IEC 60038 / ISO 10816 compliant
+│  Fault Engine (Coded Agent)│   fault detection
+│  Deployed on Alibaba Cloud │
+│  (public, always online)   │
+└───────────┬──────────────┘
+            │ HTTP GET /api/latest
+            │ HTTP POST /api/diagnose
+┌───────────▼──────────────┐
+│   UiPath Maestro BPMN      │
+│                             │
+│  Start                      │
+│   → Fetch Motor Data (Send) │
+│   → MotorMind Diagnosis     │
+│     Agent (Low-Code Agent)  │
+│   → Check Fault Severity    │
+│     (Exclusive Gateway)     │
+│       → HEALTHY → Log       │
+│       → WARNING → Review    │
+│       → CRITICAL → Approve  │
+│   → 30s timer → loop back   │
+└─────────────────────────────┘
+```
 
 ---
 
@@ -66,11 +99,11 @@ This solution uses **both**:
 All sensor values are calculated from real electrical engineering equations — not random numbers.
 
 | Sensor | Formula | Why it matters |
-|--------|---------|---------------|
-| Current | `I = P / (√3 × V × cosφ)` | Rises automatically when voltage drops |
-| Temperature | `T = T_ambient + k × I²` | Joule heating — current causes heat |
+|---|---|---|
+| Current | I = P / (√3 × V × cosφ) | Rises automatically when voltage drops |
+| Temperature | T = T_ambient + k × I² | Joule heating — current causes heat |
 | Vibration | ISO 10816 standard | Spikes characteristically on bearing fault |
-| Power | `P = √3 × V × I × cosφ / 1000` kW | Full power balance |
+| Power | P = √3 × V × I × cosφ / 1000 (kW) | Full power balance |
 
 **Motor specs:** 400V / 7.5kW / 1450 RPM / 15.2A rated / PF 0.85 / Class F insulation / 91% efficiency
 
@@ -79,130 +112,159 @@ All sensor values are calculated from real electrical engineering equations — 
 ## 23 Fault Detection Rules
 
 | Category | Rules |
-|----------|-------|
-| Electrical | Low voltage, critical undervoltage, overvoltage, overcurrent, critical overcurrent, combined voltage+current |
-| Thermal | High temperature, critical temperature, cooling failure, temperature trending |
-| Mechanical | High vibration, critical vibration, RPM drop, vibration trending |
-| Advanced | Slip anomaly, stall detection, phase imbalance proxy, efficiency degradation, power factor deviation, thermal sensor anomaly, current trending, overvoltage+overtemp combined, idle current draw |
+|---|---|
+| **Electrical** | Low voltage, critical undervoltage, overvoltage, overcurrent, critical overcurrent, combined voltage+current |
+| **Thermal** | High temperature, critical temperature, cooling failure, temperature trending |
+| **Mechanical** | High vibration, critical vibration, RPM drop, vibration trending |
+| **Advanced** | Slip anomaly, stall detection, phase imbalance proxy, efficiency degradation, power factor deviation, thermal sensor anomaly, current trending, overvoltage+overtemp combined, idle current draw |
 
 ---
 
 ## Fault Injection Scenarios
 
 | Scenario | What the agent detects |
-|----------|----------------------|
-| Voltage drop to 310V | Overcurrent (+31%), winding overload risk, real physics: I = P/(√3·V·cosφ) |
-| Bearing fault | Vibration >8 mm/s, RPM drop to 93%, thermal rise +12°C |
-| Overtemperature | Cooling failure, insulation class F limit approaching |
-| Overcurrent | 1.45× rated current, winding damage risk |
-| Combined: voltage + bearing | Cascading failure chain, BPMN routes to emergency escalation |
+|---|---|
+| Voltage drop to 310–320V | Overcurrent (+30–41%), winding overload risk, real physics: I = P/(√3·V·cosφ) |
+| Bearing fault | Vibration >7–8 mm/s, RPM drop, thermal rise from friction |
+| Overtemperature | Cooling failure detection, insulation Class F limit approaching |
+| Overcurrent | Up to 1.45× rated current, winding damage risk |
+| Combined: voltage + bearing | Cascading failure chain — BPMN routes to emergency escalation |
 
 ---
 
-## AI Diagnostic Output
-
-Every diagnosis returns a structured 5-section report:
+## Example AI Diagnostic Output
 
 ```
-STATUS: CRITICAL — motor drawing 20.1A due to supply voltage drop to 312V.
+STATUS: CRITICAL — motor drawing 21.5A due to supply voltage drop to 320V.
 
-OBSERVATIONS: Current is 20.1A, 32% above rated 15.2A. Supply voltage at 312V,
-  22% below rated 400V, causing proportional overcurrent per I = P/(√3·V·cosφ).
+OBSERVATIONS: Current is 21.5A, 41% above rated 15.2A. Supply voltage at 320V,
+  20% below rated 400V, causing proportional overcurrent per I = P/(√3·V·cosφ).
 
-ROOT CAUSE: Voltage drop forces higher current draw to maintain torque.
-  At 312V, current must increase by factor V_rated/V_actual = 1.28 to
-  deliver same shaft power. Winding I²R losses increase by 64%.
+ROOT CAUSE: Voltage drop forces higher current draw to maintain torque. At 320V,
+  current must increase to deliver the same shaft power. Winding I²R losses
+  rise sharply, pushing temperature toward the Class F insulation limit (155°C).
 
-Action 1 IMMEDIATE: Check main distribution panel for loose connections
-  or failed tap changer. Use clamp meter to verify three-phase balance.
-Action 2 THIS WEEK: Install voltage stabilizer or UPS upstream of motor.
-Action 3 NEXT MAINTENANCE: Check winding insulation resistance (megger test).
+ACTION 1 [IMMEDIATE]: Measure all 3 phase voltages at the motor terminal box
+  with a calibrated multimeter. Check distribution panel for loose connections.
+ACTION 2 [THIS WEEK]: Install a voltage stabilizer or UPS upstream of the motor.
+ACTION 3 [NEXT MAINTENANCE]: Megger-test winding insulation resistance.
 
-RISK ASSESSMENT: At current overload level, winding insulation will degrade
-  within 4-8 hours of continuous operation. Immediate voltage restoration
-  recommended. Safety risk: HIGH — overheating + potential winding failure.
+RISK ASSESSMENT: Insulation failure within 2–4 hours of continuous operation.
+  Immediate shutdown recommended. Personnel safety risk: MEDIUM (arc flash).
 ```
 
----
+### 1. Try the live system (fastest — no installation)
 
-## Setup Instructions
+1. Open **http://8.216.39.121:5000** in any browser. This is the live Flask dashboard, deployed on a public Alibaba Cloud server (Ubuntu 22.04), online 24/7 for judging.
+2. Click **Start** — the motor ramps up over a 4-second startup sequence.
+3. Use the sidebar sliders (Load, Supply Voltage, RPM Setpoint) and fault-injection buttons (Bearing, Overtemp, Volt Drop, Overcurrent) to create different motor conditions.
+4. Click **Run Diagnosis** to trigger a Gemini AI analysis, or wait — it runs automatically every 30 seconds while the motor is running.
+5. Inject a fault (e.g., **Bearing**) and watch the status card change to WARNING/CRITICAL with a full structured diagnosis (STATUS / OBSERVATIONS / ROOT CAUSE / ACTIONS / RISK).
+6. The **UiPath Messages** panel in the sidebar shows live messages received from the UiPath Maestro BPMN process when it runs (see below).
 
-### Requirements
-- Python 3.10+
-- Gemini API key (free at [aistudio.google.com](https://aistudio.google.com))
-- UiPath Automation Cloud account (Labs access for hackathon)
+### 2. Run the UiPath Maestro BPMN process
 
-### Local run (test the agent)
+1. Sign in to **cloud.uipath.com**, tenant: `motormindai`.
+2. Open **Solution → Maestro BPMN → Process.bpmn**.
+3. Click **Debug** (see *Known Limitations* — Publish is currently broken on this tenant's Community Plan; Debug deploys and runs the process correctly).
+4. The process will:
+   - Call `GET http://8.216.39.121:5000/api/latest` to fetch live sensor data
+   - Pass it to the **MotorMind Diagnosis Agent**
+   - Route through the **Check Fault Severity** gateway based on the returned `severity`
+   - Log the result / notify for review / request shutdown approval accordingly
+5. Open the **Execution Trail** tab to see every step (Fetch Motor Data → Agent run → LLM call → Agent output → Gateway → routed task), each with full input/output JSON visible under **Step variables**.
+
+### 3. Run the Python backend locally (optional, for code review)
 
 ```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/factoryguard-uipath.git
-cd factoryguard-uipath
-
-# Set your Gemini API key
-export GEMINI_API_KEY=your_key_here   # Linux/Mac
-set GEMINI_API_KEY=your_key_here      # Windows
-
-# Run a single diagnosis (healthy motor)
-python agent/motor_agent.py
-
-# Simulate a bearing fault
-python agent/motor_agent.py --simulate bearing
-
-# Simulate voltage drop
-python agent/motor_agent.py --simulate voltage
-
-# Simulate combined fault (worst case)
-python agent/motor_agent.py --simulate combined
-
-# Start HTTP server mode (for UiPath Agent Builder)
-python agent/motor_agent.py --serve
+git clone https://github.com/TH3-HUNTER/MotorMind-AI.git
+cd MotorMind-AI
+pip install flask gunicorn
+python web_app.py
+# Open http://localhost:5000
 ```
 
-### Connect to UiPath
+To point your own UiPath BPMN at a local instance instead of the Alibaba Cloud deployment, replace the URL in the **Fetch Motor Data** Send Task with `http://YOUR_IP:5000/api/latest`.
 
-1. Start the agent in server mode: `python agent/motor_agent.py --serve`
-2. In UiPath Agent Builder → New Agent → Webhook → point to `http://localhost:8080`
-3. Import the BPMN process from `uipath/factoryguard_process.xaml`
-4. Configure human task assignees in Maestro settings
-5. Run the process — it will loop every 60 seconds
+### 4. Environment / configuration
+
+- Gemini API key is already configured in `motor_agent.py` and `web_app.py` for judging convenience (free tier). No additional setup required.
+- No `.env` file or secrets management needed to run the demo.
 
 ---
 
-## AI-Assisted Development
+## Known Limitations & Platform Issues Encountered
 
-This project was built with assistance from **Claude** (Anthropic) as a coding agent, used for:
+In the interest of transparency, the following platform-level issues affected development and are reflected in the current state of the submission:
+
+- **Maestro BPMN Publish is broken** on the hackathon Community Plan tenant — every Publish attempt returns *"No solution tool factory is registered."* The Debug button initially showed the same error; debugging this further confirmed it was a platform-side issue, not a configuration problem. We have not found a workaround and are waiting on the UiPath team to resolve it. **Debug currently works and is the recommended way for judges to run the process end-to-end.**
+- **GPT-5.4 AI Units were exhausted (250/250)** during development. We did not change the underlying model. Instead, we modified the main BPMN process to bypass the Agent step during testing (calling the Flask `/api/diagnose` endpoint directly, which uses Gemini) so that development could continue while waiting for the unit quota to reset.
+- **UiPath Action Center / Action Apps are not enabled** on this hackathon tenant ("Actions requires UiPath Automation Cloud"). The `SimpleApprovalApp` (Action Schema, outcomes, input properties) was fully built and is included in the solution, but cannot be triggered as a live human task on this tenant. As a working alternative, WARNING/CRITICAL events are sent via HTTP POST to our Flask API and displayed in real time in the dashboard's **UiPath Messages** panel, simulating the same human-in-the-loop notification flow.
+- **Studio Desktop could not be used** as a fallback (Error 1232 — no robot license assigned on the Community Plan tenant). Development was done entirely in Studio Web.
+
+A full writeup of these issues, what was tried, and the workarounds used is included in the project's Devpost submission and presentation.
+
+---
+
+## Standards & Engineering References
+
+- **IEC 60038** — voltage thresholds: ±5% warning band (380–420V), ±10% critical band (360–440V)
+- **ISO 10816-3** — vibration severity: Zone B/C boundary at 4.5 mm/s, Zone D (critical) at 7.1 mm/s
+- **IEC 60034** — insulation classes referenced in AI risk assessment (Class F = 155°C limit)
+
+---
+
+## Tech Stack
+
+`Python` · `Flask` · `Gunicorn` · `Gemini AI` (gemini-3.1-flash-lite) · `UiPath Studio Web` · `UiPath Maestro BPMN` · `UiPath Agent Builder` · `Alibaba Cloud ECS (Ubuntu 22.04)` · vanilla `JavaScript` / `CSS`
+
+---
+
+## Acknowledgements — AI-Assisted Development
+
+This project was built with assistance from **Claude (Anthropic)**, used as a coding agent throughout development for:
+
 - Architecture design and BPMN flow planning
-- Python coded agent scaffolding and physics engine validation
-- Prompt engineering for the Gemini diagnostic system
-- Code review and debugging
+- Python coded agent scaffolding and motor physics equation validation
+- Flask backend development, debugging, and deployment (Alibaba Cloud)
+- UiPath BPMN/XML troubleshooting (variable binding, gateway conditions, Send Task configuration)
+- Prompt engineering for the Gemini diagnostic agent's system/user prompts
+- Code review, bug fixing, and this documentation
 
-Claude was used as a development tool throughout the build process. All motor physics, fault detection rules, and engineering domain knowledge are original work based on the developer's electrical engineering background.
+Claude was used as a development tool throughout the build process. All motor physics, fault detection rules, electrical engineering standards (IEC 60038, ISO 10816, IEC 60034), and domain knowledge are original work based on the developer's Electrical Engineering background and hands-on industrial experience.
 
-*Per UiPath AgentHack rules, use of AI coding assistants is permitted and eligible for bonus points when documented.*
+*Per UiPath AgentHack rules, use of AI coding assistants is permitted and eligible for bonus points when documented — hence this section.*
 
 ---
 
 ## Project Structure
 
 ```
-factoryguard-uipath/
+MotorMind-AI/
+├── web_app.py                  ← Flask web dashboard (main entry point)
 ├── agent/
-│   └── motor_agent.py          ← Python coded agent (core logic)
-├── uipath/
-│   └── factoryguard_process.xaml ← Maestro BPMN process definition
+│   └── motor_agent.py          ← Coded agent: physics engine + 23-rule fault
+│                                   detection + Gemini AI diagnosis + Flask
+│                                   server mode for UiPath HTTP calls
 ├── docs/
 │   └── architecture.png        ← Architecture diagram
-├── README.md                   ← This file
 ├── requirements.txt
-└── LICENSE                     ← MIT
+├── README.md                   ← This file
+└── LICENSE
 ```
 
 ---
 
 ## About the Developer
 
-**Hamza Manai** — Electrical Engineering graduate, Industry 4.0 Master's student, Tunisia.
-Domain expertise: predictive maintenance, resistance welding machines, 3-phase motor protection systems.
+**Hamza Manai** — Electrical Engineering graduate, Mechatronics Master's student (ISET Radès, Tunisia). Domain expertise: predictive maintenance, resistance welding machine diagnostics (PFE project with ESP32 + AI fault prediction), 3-phase motor protection systems, industrial automation (TIA Portal, PID control).
 
-GitHub: [https://github.com/TH3-HUNTER](https://github.com/TH3-HUNTER)
+GitHub: https://github.com/TH3-HUNTER
+
+---
+
+## Links
+
+- **Live Demo:** http://8.216.39.121:5000
+- **UiPath Orchestrator:** cloud.uipath.com/motormindai
+- **Author:** Hamza Manai — manaihamza2003@gmail.com
